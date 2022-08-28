@@ -11,7 +11,7 @@ run: build
 	@bin/main ../pg2009.txt
 
 time: build
-	@time bin/main ../pg2009.txt
+	@gtime -v bin/main ../pg2009.txt
 
 clean:
 	@rm -rf bin

@@ -2,8 +2,14 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 
 #define BUFFER_SIZE 4096
+
+#define ERROR_AND_EXIT(...) { printf(__VA_ARGS__); exit(0); }
 
 #define IS_UPPER(c) ((c) >= 'A' && (c) <= 'Z')
 #define IS_VALID(c) ((c) == '\'' || (c) >= 'a' && (c) <= 'z' || (c) >= 'A' && (c) <= 'Z')
@@ -92,47 +98,34 @@ triplet_t *make_triplet (char *a, char *b, char *c, int hash)
     return result;
 }
 
-triplet_t *find (triplet_t* node, char *a, char *b, char *c, int hash)
+triplet_t *find (triplet_t* t, char *a, char *b, char *c, int hash)
 {
-    int comp = node->hash - hash;
+    int comp = t->hash - hash;
+
+    #define VISIT(n) { if (n) return find (n, a, b, c, hash); n = make_triplet (a, b, c, hash); return find (n, a, b, c, hash); }
 
     if (comp < 0)
-    {
-        if (node->left)
-            return find (node->left, a, b, c, hash);
-
-        node->left = make_triplet (a, b, c, hash);
-        return find (node->left, a, b, c, hash);
-    }
+        VISIT(t->left)
     else if (comp > 0)
-    {
-        if (node->right)
-            return find (node->right, a, b, c, hash);
-        node->right = make_triplet (a, b, c, hash);
+        VISIT(t->right)
 
-        return find (node->right, a, b, c, hash);
-    }
-
-    return node;
+    return t;
 }
 
 char* read_file (char* path)
 {
-    FILE *fp = fopen (path, "r");
-    if (fp == NULL)
-        return NULL;
+    int fp = open (path, O_RDONLY);
+    if (fp == -1)
+        ERROR_AND_EXIT ("open() err: %s", strerror(errno));
 
-    fseek (fp, 0, SEEK_END);
-    long filesize = ftell (fp);
-    fseek (fp, 0, SEEK_SET);  
- 
-    char *result = (char *) malloc (sizeof (char) * filesize);   
-    if (result == NULL)
-        return NULL;
- 
-    fread (result, sizeof (char), filesize, fp);
-    fclose (fp);
+    struct stat fs;
+    if (fstat (fp, &fs))
+        ERROR_AND_EXIT ("fstat() err: %s", strerror(errno));
 
+    char *result = (char *) mmap (NULL, fs.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fp, 0);
+    if (result == NULL || result == MAP_FAILED)
+        ERROR_AND_EXIT ("Can't mmap file");
+    
     return result;
 }
 
@@ -172,8 +165,8 @@ int next_word (char **input, char **dest)
 void inc (char *a, char *b, char *c)
 {
     int hash = murmurhash (a, b, c, 0);
-    triplet_t *node = find (root, a, b, c, hash);
-    node->count++;
+    triplet_t *t = find (root, a, b, c, hash);
+    t->count++;
 }
 
 int generate_triplets (char *input)
@@ -199,66 +192,49 @@ int generate_triplets (char *input)
     return count;
 }
 
-void get_top (triplet_t *node, triplet_t **top, int count)
+void get_ranking (triplet_t *t, triplet_t **dest, int count)
 {
-    int idx = -1;
+    if (!t)
+        return;
+
+    get_ranking (t->left, dest, count);
+    get_ranking (t->right, dest, count);
+
     for (int i = 0; i < count; i++)
     {
-        if (node->count < top[i]->count)
+        if (dest[i] == NULL || t->count >= dest[i]->count)
+        {
+            for (int j = i + 1; j < count; j++)
+                dest[j] = dest[j - 1];
+
+            dest[i] = t;
             break;
-        idx = i;
+        }
     }
-
-    if (idx != -1)
-    {
-        for (int i = idx - 1; i >= 0; i--)
-            top[i] = top[i + 1];
-
-        top[idx] = node;
-    }
-
-    if (node->left)
-        get_top (node->left, top, count);
-
-    if (node->right)
-        get_top (node->right, top, count);
 }
 
 void print_top_triplets ()
 {
-    triplet_t **ranking = malloc (sizeof (triplet_t *) * 3);
-    for (int i = 0; i < 3; i++)
-        ranking[i] = root;
+    triplet_t *ranking[3] = { NULL, NULL, NULL };    
 
-    get_top (root, ranking, 3);
+    get_ranking (root, ranking, 3);
 
-    for (int i = 2; i >= 0; i--)
+    for (int i = 0; i < 3 && ranking[i]; i++)
         printf ("%s %s %s - %d\n", ranking[i]->a, ranking[i]->b, ranking[i]->c, ranking[i]->count);
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 2)
-    {
-        printf ("Filename expected");
-        return 1;
-    }
+    if (argc < 1)
+        ERROR_AND_EXIT ("Filename expected"); 
 
     char* input = read_file (argv[1]);
-    if (input == NULL)
-    {
-        printf ("Error loading '%s'.", argv[1]);
-        return 1;
-    }
 
     new_triplet_buffer ();
     root = make_triplet (NULL, NULL, NULL, 0);
 
     if (generate_triplets (input) == 0)
-    {
-        printf ("Too few words.");
-        return 1;
-    }
+        ERROR_AND_EXIT ("Too few words.");
 
     print_top_triplets ();
 
