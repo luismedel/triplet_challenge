@@ -5,10 +5,12 @@ bin:
 bin/main: bin
 	@gcc main.c -o bin/main
 
-run: bin/main
+build: bin/main
+
+run: build
 	@bin/main ../pg2009.txt
 
-time: bin/main
+time: build
 	@time bin/main ../pg2009.txt
 
 clean:
